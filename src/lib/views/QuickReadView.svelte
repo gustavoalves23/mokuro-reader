@@ -5,7 +5,7 @@
   import { onMount } from 'svelte';
 
   let mangaName = $derived($routeParams.manga_name || '');
-  let volumeName = $derived($routeParams.volume_name || '');
+  let volumeNr = $derived($routeParams.volume_number || '');
   let pageNumber = $derived($routeParams.page_number || 1);
 
   onMount(async () => {
@@ -14,9 +14,10 @@
     const matchingMangaVolumes = volumes.filter((vol) => vol.series_title === mangaName);
 
     if (matchingMangaVolumes) {
-      const matchingVolume = matchingMangaVolumes.find(
-        (vol) => vol.volume_title.trim() === volumeName.trim()
-      );
+      const matchingVolume = matchingMangaVolumes.find((vol) => {
+        const volumeNameNumber = /\d+$/.exec(vol.volume_title);
+        return volumeNameNumber && +volumeNameNumber[0] === +volumeNr;
+      });
 
       if (matchingVolume) {
         updateProgress(matchingVolume.volume_uuid, pageNumber);
