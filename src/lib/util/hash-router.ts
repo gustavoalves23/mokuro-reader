@@ -11,12 +11,13 @@ import { writable, derived, get } from 'svelte/store';
 export type View =
   | { type: 'catalog' }
   | { type: 'series'; seriesId: string }
-  | { type: 'reader'; seriesId: string; volumeId: string }
+  | { type: 'reader'; seriesId: string; volumeId: string; pageNumber?: number }
   | { type: 'volume-text'; seriesId: string; volumeId: string }
   | { type: 'series-text'; seriesId: string }
   | { type: 'cloud' }
   | { type: 'upload' }
-  | { type: 'reading-speed' };
+  | { type: 'reading-speed' }
+  | { type: 'quick-read'; seriesName: string; volumeNumber: number; pageNumber: number };
 
 /**
  * Current view state
@@ -52,6 +53,13 @@ export function parseHash(hash: string): View {
       return { type: 'reader', seriesId, volumeId };
     }
 
+    if (segments[0] === 'quick-read' && segments.length >= 3) {
+      const seriesName = decodeURIComponent(segments[1]);
+      const volumeNumber = parseInt(segments[2]);
+      const pageNumber = parseInt(segments[3]);
+      return { type: 'quick-read', seriesName, volumeNumber, pageNumber };
+    }
+
     return { type: 'catalog' };
   } catch {
     // decodeURIComponent can throw URIError on malformed percent-encoding
@@ -82,6 +90,8 @@ export function viewToHash(view: View): string {
       return '#/upload';
     case 'reading-speed':
       return '#/reading-speed';
+    case 'quick-read':
+      return `#/quick-read/${encodeURIComponent(view.seriesName)}/${view.volumeNumber}/${view.pageNumber}`;
   }
 }
 
@@ -120,8 +130,8 @@ export const nav = {
     navigate({ type: 'series', seriesId }, options),
 
   /** Navigate to the reader */
-  toReader: (seriesId: string, volumeId: string, options?: NavigateOptions) =>
-    navigate({ type: 'reader', seriesId, volumeId }, options),
+  toReader: (seriesId: string, volumeId: string, options?: NavigateOptions, pageNumber?: number) =>
+    navigate({ type: 'reader', seriesId, volumeId, pageNumber }, options),
 
   /** Navigate to volume text view */
   toVolumeText: (seriesId: string, volumeId: string, options?: NavigateOptions) =>
@@ -196,6 +206,12 @@ export const routeParams = derived(currentView, ($currentView) => {
       return { manga: $currentView.seriesId, volume: $currentView.volumeId };
     case 'series-text':
       return { manga: $currentView.seriesId };
+    case 'quick-read':
+      return {
+        manga_name: $currentView.seriesName,
+        volume_number: $currentView.volumeNumber,
+        page_number: $currentView.pageNumber
+      };
     default:
       return {};
   }

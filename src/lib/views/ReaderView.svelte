@@ -9,6 +9,7 @@
   import { routeParams } from '$lib/util/hash-router';
 
   let volumeId = $derived($routeParams.volume || '');
+  let pageNumber = $derived($routeParams.page_number);
 
   // Cache volume settings to prevent flash when unrelated volumes are added.
   // The effectiveVolumeSettings store emits a new object whenever ANY volume changes,
