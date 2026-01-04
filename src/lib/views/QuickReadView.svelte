@@ -15,8 +15,9 @@
 
     if (matchingMangaVolumes) {
       const matchingVolume = matchingMangaVolumes.find((vol) => {
-        const volumeNameNumber = /\d+$/.exec(vol.volume_title);
-        return volumeNameNumber && +volumeNameNumber[0] === +volumeNr;
+        console.log(vol.volume_title, volumeNr);
+        const volumeNameNumber = /V([\d.])+$/.exec(vol.volume_title);
+        return volumeNameNumber && +volumeNameNumber[1] === +volumeNr;
       });
 
       if (matchingVolume) {
