@@ -17,7 +17,7 @@ export type View =
   | { type: 'cloud' }
   | { type: 'upload' }
   | { type: 'reading-speed' }
-  | { type: 'quick-read'; seriesName: string; volumeNumber: number; pageNumber: number };
+  | { type: 'quick-read'; seriesName: string; volumeName: string; pageNumber: number };
 
 /**
  * Current view state
@@ -55,9 +55,9 @@ export function parseHash(hash: string): View {
 
     if (segments[0] === 'quick-read' && segments.length >= 3) {
       const seriesName = decodeURIComponent(segments[1]);
-      const volumeNumber = parseInt(segments[2]);
+      const volumeName = decodeURIComponent(segments[2]);
       const pageNumber = parseInt(segments[3]);
-      return { type: 'quick-read', seriesName, volumeNumber, pageNumber };
+      return { type: 'quick-read', seriesName, volumeName, pageNumber };
     }
 
     return { type: 'catalog' };
@@ -91,7 +91,7 @@ export function viewToHash(view: View): string {
     case 'reading-speed':
       return '#/reading-speed';
     case 'quick-read':
-      return `#/quick-read/${encodeURIComponent(view.seriesName)}/${view.volumeNumber}/${view.pageNumber}`;
+      return `#/quick-read/${encodeURIComponent(view.seriesName)}/${view.volumeName}/${view.pageNumber}`;
   }
 }
 
@@ -209,7 +209,7 @@ export const routeParams = derived(currentView, ($currentView) => {
     case 'quick-read':
       return {
         manga_name: $currentView.seriesName,
-        volume_number: $currentView.volumeNumber,
+        volume_name: $currentView.volumeName,
         page_number: $currentView.pageNumber
       };
     default:
