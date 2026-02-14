@@ -14,7 +14,8 @@
     cloud: () => import('$lib/views/CloudView.svelte'),
     upload: () => import('$lib/views/UploadView.svelte'),
     'reading-speed': () => import('$lib/views/ReadingSpeedView.svelte'),
-    'quick-read': () => import('$lib/views/QuickReadView.svelte')
+    'quick-read': () => import('$lib/views/QuickReadView.svelte'),
+    'merge-series': () => import('$lib/views/MergeSeriesView.svelte')
   };
 
   // Currently loaded component

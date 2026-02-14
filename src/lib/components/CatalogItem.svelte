@@ -1,12 +1,11 @@
 <script lang="ts">
   import type { VolumeMetadata } from '$lib/types';
   import { progress, catalogSettings } from '$lib/settings';
-  import { showSnackbar } from '$lib/util';
-  import { downloadQueue, queueSeriesVolumes } from '$lib/util/download-queue';
-  import { unifiedCloudManager } from '$lib/util/sync/unified-cloud-manager';
+  import { downloadQueue } from '$lib/util/download-queue';
   import { nav } from '$lib/util/hash-router';
   import { Spinner } from 'flowbite-svelte';
   import { DownloadSolid } from 'flowbite-svelte-icons';
+  import ThumbnailCanvas from './ThumbnailCanvas.svelte';
 
   interface Props {
     series_uuid: string;
@@ -16,10 +15,8 @@
 
   let { series_uuid, volumes, providerName = 'Cloud' }: Props = $props();
 
-  // Volumes are already filtered by parent, just need to sort once
-  let seriesVolumes = $derived(
-    [...volumes].sort((a, b) => a.volume_title.localeCompare(b.volume_title))
-  );
+  // Volumes are pre-sorted by catalog store (natural sort)
+  let seriesVolumes = $derived(volumes);
 
   // Split into local vs cloud placeholders
   let localVolumes = $derived(seriesVolumes.filter((v) => !v.isPlaceholder));
@@ -47,9 +44,6 @@
     return stackCount === 0 ? sourceVolumes : sourceVolumes.slice(0, stackCount);
   });
 
-  // Keep allSeriesVolumes for handleClick function
-  let allSeriesVolumes = $derived(seriesVolumes);
-
   // Check if this series is downloading or queued
   let isDownloading = $derived(
     isPlaceholderOnly && volume
@@ -57,100 +51,35 @@
       : false
   );
 
-  // Store blob URLs and dimensions for thumbnails
-  let thumbnailUrls = $state<Map<string, string>>(new Map());
-  let thumbnailDimensions = $state<Map<string, { width: number; height: number }>>(new Map());
-
-  // Create blob URLs and load dimensions for stacked volumes
-  $effect(() => {
-    const newUrls = new Map<string, string>();
-    const newDimensions = new Map<string, { width: number; height: number }>();
-    const urlsToRevoke: string[] = [];
-
-    const promises = stackedVolumes.map((vol) => {
-      if (!vol.thumbnail) return Promise.resolve();
-
-      return new Promise<void>((resolve) => {
-        const url = URL.createObjectURL(vol.thumbnail!);
-        urlsToRevoke.push(url);
-        newUrls.set(vol.volume_uuid, url);
-
-        const img = new Image();
-        img.onload = () => {
-          newDimensions.set(vol.volume_uuid, {
-            width: img.naturalWidth,
-            height: img.naturalHeight
-          });
-          resolve();
-        };
-        img.onerror = () => resolve();
-        img.src = url;
-      });
-    });
-
-    Promise.all(promises).then(() => {
-      thumbnailUrls = newUrls;
-      thumbnailDimensions = newDimensions;
-    });
-
-    // Cleanup: revoke all blob URLs when effect is destroyed
-    return () => {
-      urlsToRevoke.forEach((url) => URL.revokeObjectURL(url));
-    };
-  });
-
   // Base thumbnail dimensions
   const BASE_WIDTH = 250;
   const BASE_HEIGHT = 360;
   const OUTER_PADDING = 25; // pt-4 pb-6 ≈ 25px
 
+  // Get dimensions from volume metadata, with fallback to defaults
+  let thumbnailDimensions = $derived.by(() => {
+    const dims = new Map<string, { width: number; height: number }>();
+    for (const vol of stackedVolumes) {
+      if (vol.thumbnail_width && vol.thumbnail_height) {
+        dims.set(vol.volume_uuid, {
+          width: vol.thumbnail_width,
+          height: vol.thumbnail_height
+        });
+      } else if (vol.thumbnail) {
+        // Fallback to default aspect ratio for volumes without stored dimensions
+        dims.set(vol.volume_uuid, {
+          width: BASE_WIDTH,
+          height: BASE_HEIGHT
+        });
+      }
+    }
+    return dims;
+  });
+
   // Check if cloud series should use compact layout
   let useCompactForCloud = $derived(
     isPlaceholderOnly && ($catalogSettings?.compactCloudSeries ?? false)
   );
-
-  // Calculate container dimensions based on settings
-  let containerDimensions = $derived.by(() => {
-    // Use compact settings for cloud series if enabled
-    if (useCompactForCloud) {
-      return {
-        innerWidth: BASE_WIDTH,
-        innerHeight: BASE_HEIGHT,
-        outerWidth: BASE_WIDTH,
-        outerHeight: BASE_HEIGHT + OUTER_PADDING
-      };
-    }
-
-    const stackCountSetting = $catalogSettings?.stackCount ?? 3;
-    const hOffsetPercent = ($catalogSettings?.horizontalStep ?? 11) / 100;
-    // Force vertical offset to 0 when stack count is 0 (all volumes / spine mode)
-    const vOffsetPercent =
-      stackCountSetting === 0 ? 0 : ($catalogSettings?.verticalStep ?? 5) / 100;
-
-    // Use actual volume count when stackCount is 0 (all volumes)
-    // For placeholders, use seriesVolumes; for real thumbnails, use stackedVolumes
-    const volumeCount = isPlaceholderOnly ? seriesVolumes.length : stackedVolumes.length;
-    const effectiveStackCount = stackCountSetting === 0 ? volumeCount : stackCountSetting;
-
-    // Extra space needed for stacking: offset% × base × (count - 1)
-    const extraWidth = BASE_WIDTH * hOffsetPercent * (effectiveStackCount - 1);
-    const extraHeight = BASE_HEIGHT * vOffsetPercent * (effectiveStackCount - 1);
-
-    // Inner container (thumbnail area)
-    const innerWidth = Math.round(BASE_WIDTH + extraWidth);
-    const innerHeight = Math.round(BASE_HEIGHT + extraHeight);
-
-    // Outer container (with padding)
-    const outerWidth = innerWidth;
-    const outerHeight = innerHeight + OUTER_PADDING;
-
-    return {
-      innerWidth,
-      innerHeight,
-      outerWidth,
-      outerHeight
-    };
-  });
 
   // Calculate rendered dimensions for an image given max constraints
   function getRenderedDimensions(naturalWidth: number, naturalHeight: number) {
@@ -185,6 +114,89 @@
 
     return count > 0 ? totalHeight / count : BASE_HEIGHT;
   });
+
+  // Get the rendered width of the top (first) volume - defines the left edge of the stack
+  // Wider volumes underneath will be clipped by overflow-hidden
+  let topVolumeWidth = $derived.by(() => {
+    if (stackedVolumes.length === 0) return BASE_WIDTH;
+
+    const topVol = stackedVolumes[0];
+    const dims = thumbnailDimensions.get(topVol.volume_uuid);
+    if (!dims) return BASE_WIDTH;
+
+    if (uniformHeight !== null) {
+      // Uniform height mode: width from aspect ratio (capped at BASE_WIDTH)
+      const aspectRatio = dims.width / dims.height;
+      return Math.min(uniformHeight * aspectRatio, BASE_WIDTH);
+    } else {
+      // Normal mode: contain within max bounds
+      return getRenderedDimensions(dims.width, dims.height).width;
+    }
+  });
+
+  // Calculate container dimensions based on settings
+  let containerDimensions = $derived.by(() => {
+    // Use compact settings for cloud series if enabled
+    if (useCompactForCloud) {
+      return {
+        innerWidth: BASE_WIDTH,
+        innerHeight: BASE_HEIGHT,
+        outerWidth: BASE_WIDTH,
+        outerHeight: BASE_HEIGHT + OUTER_PADDING
+      };
+    }
+
+    const stackCountSetting = $catalogSettings?.stackCount ?? 3;
+    const hOffsetPercent = ($catalogSettings?.horizontalStep ?? 11) / 100;
+    // Force vertical offset to 0 when stack count is 0 (all volumes / spine mode)
+    const vOffsetPercent =
+      stackCountSetting === 0 ? 0 : ($catalogSettings?.verticalStep ?? 5) / 100;
+
+    // Use actual volume count when stackCount is 0 (all volumes)
+    // For placeholders, use seriesVolumes; for real thumbnails, use stackedVolumes
+    const volumeCount = isPlaceholderOnly ? seriesVolumes.length : stackedVolumes.length;
+    const effectiveStackCount = stackCountSetting === 0 ? volumeCount : stackCountSetting;
+
+    // Use top volume width for container sizing (placeholders use BASE_WIDTH)
+    // This ensures the top volume's left edge aligns with the container's left edge
+    // and wider volumes underneath get clipped by overflow-hidden
+    const baseWidth = isPlaceholderOnly ? BASE_WIDTH : topVolumeWidth;
+
+    // Extra space needed for stacking: offset% × base × (count - 1)
+    const extraWidth = BASE_WIDTH * hOffsetPercent * (effectiveStackCount - 1);
+    const extraHeight = BASE_HEIGHT * vOffsetPercent * (effectiveStackCount - 1);
+
+    // Inner container (thumbnail area)
+    const innerWidth = Math.round(baseWidth + extraWidth);
+    const innerHeight = Math.round(BASE_HEIGHT + extraHeight);
+
+    // Outer container (with padding)
+    const outerWidth = innerWidth;
+    const outerHeight = innerHeight + OUTER_PADDING;
+
+    return {
+      innerWidth,
+      innerHeight,
+      outerWidth,
+      outerHeight
+    };
+  });
+
+  // Calculate canvas dimensions for a volume thumbnail
+  function getCanvasDimensions(volumeUuid: string): { width: number; height: number } | null {
+    const dims = thumbnailDimensions.get(volumeUuid);
+    if (!dims) return null;
+
+    if (uniformHeight !== null) {
+      // Uniform height mode: fixed height, width from aspect ratio (capped)
+      const aspectRatio = dims.width / dims.height;
+      const width = Math.min(uniformHeight * aspectRatio, BASE_WIDTH);
+      return { width, height: uniformHeight };
+    } else {
+      // Normal mode: contain within max bounds
+      return getRenderedDimensions(dims.width, dims.height);
+    }
+  }
 
   // Calculate step sizes and centering/spreading offsets
   let stepSizes = $derived.by(() => {
@@ -328,34 +340,18 @@
     };
   });
 
+  // Use title for placeholder-only (handles transition when first volume downloads)
+  // Use UUID for local series (handles edge case of same-name series)
+  let navId = $derived(isPlaceholderOnly ? volume?.series_title || '' : series_uuid);
+
   async function handleClick(e: MouseEvent) {
-    if (isPlaceholderOnly) {
-      e.preventDefault();
-
-      // Prevent re-clicking during download
-      if (isDownloading) {
-        return;
-      }
-
-      // Check if any cloud provider is authenticated
-      const hasProvider = unifiedCloudManager.getActiveProvider() !== null;
-      if (!hasProvider) {
-        showSnackbar('Please sign in to a cloud storage provider first');
-        return;
-      }
-
-      // Queue all series volumes for download
-      queueSeriesVolumes(allSeriesVolumes);
-    } else {
-      // Use hash-based navigation
-      e.preventDefault();
-      nav.toSeries(series_uuid);
-    }
+    e.preventDefault();
+    nav.toSeries(navId);
   }
 </script>
 
 {#if volume}
-  <a href="#/series/{series_uuid}" onclick={handleClick}>
+  <a href="#/series/{encodeURIComponent(navId)}" onclick={handleClick}>
     <div
       class:text-green-400={isComplete}
       class:opacity-70={isPlaceholderOnly}
@@ -406,15 +402,16 @@
             style="width: {containerDimensions.innerWidth}px; height: {containerDimensions.innerHeight}px;"
           >
             {#each stackedVolumes as vol, i (vol.volume_uuid)}
-              {#if thumbnailUrls.get(vol.volume_uuid)}
-                <img
-                  src={thumbnailUrls.get(vol.volume_uuid)}
-                  alt={vol.volume_title}
+              {@const canvasDims = getCanvasDimensions(vol.volume_uuid)}
+              {#if canvasDims && vol.thumbnail}
+                <ThumbnailCanvas
+                  volumeUuid={vol.volume_uuid}
+                  file={vol.thumbnail}
+                  width={canvasDims.width}
+                  height={canvasDims.height}
                   class="absolute border border-gray-900 bg-black"
-                  style="max-width: {BASE_WIDTH}px; {uniformHeight !== null
-                    ? `height: ${uniformHeight}px; width: auto;`
-                    : `max-height: ${BASE_HEIGHT}px; height: auto;`} left: {stepSizes.leftOffset +
-                    i * stepSizes.horizontal}px; top: {stepSizes.topOffset +
+                  style="right: {(stackedVolumes.length - 1 - i) *
+                    stepSizes.horizontal}px; top: {stepSizes.topOffset +
                     i * stepSizes.vertical}px; z-index: {stackedVolumes.length -
                     i}; filter: drop-shadow(2px 4px 6px rgba(0, 0, 0, 0.5));"
                 />

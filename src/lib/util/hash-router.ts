@@ -17,7 +17,8 @@ export type View =
   | { type: 'cloud' }
   | { type: 'upload' }
   | { type: 'reading-speed' }
-  | { type: 'quick-read'; seriesName: string; volumeNumber: number; pageNumber: number };
+  | { type: 'quick-read'; seriesName: string; volumeNumber: number; pageNumber: number }
+  | { type: 'merge-series' };
 
 /**
  * Current view state
@@ -39,6 +40,7 @@ export function parseHash(hash: string): View {
     if (segments[0] === 'cloud') return { type: 'cloud' };
     if (segments[0] === 'upload') return { type: 'upload' };
     if (segments[0] === 'reading-speed') return { type: 'reading-speed' };
+    if (segments[0] === 'merge-series') return { type: 'merge-series' };
 
     if (segments[0] === 'series' && segments.length >= 2) {
       const seriesId = decodeURIComponent(segments[1]);
@@ -92,6 +94,8 @@ export function viewToHash(view: View): string {
       return '#/reading-speed';
     case 'quick-read':
       return `#/quick-read/${encodeURIComponent(view.seriesName)}/${view.volumeNumber}/${view.pageNumber}`;
+    case 'merge-series':
+      return '#/merge-series';
   }
 }
 
@@ -148,7 +152,10 @@ export const nav = {
   toUpload: (options?: NavigateOptions) => navigate({ type: 'upload' }, options),
 
   /** Navigate to reading speed page */
-  toReadingSpeed: (options?: NavigateOptions) => navigate({ type: 'reading-speed' }, options)
+  toReadingSpeed: (options?: NavigateOptions) => navigate({ type: 'reading-speed' }, options),
+
+  /** Navigate to merge series page */
+  toMergeSeries: (options?: NavigateOptions) => navigate({ type: 'merge-series' }, options)
 };
 
 /**
@@ -163,6 +170,7 @@ export const nav = {
  * - cloud -> catalog
  * - reading-speed -> catalog
  * - upload -> catalog
+ * - merge-series -> catalog
  * - catalog -> (no-op)
  */
 export function navigateBack(): void {
@@ -184,6 +192,7 @@ export function navigateBack(): void {
     case 'cloud':
     case 'reading-speed':
     case 'upload':
+    case 'merge-series':
       nav.toCatalog();
       break;
     case 'catalog':
